@@ -9,7 +9,7 @@ A small **web dashboard** (default port **8484**) shows process health, per-stat
 ## Quick start
 
 1. Copy `.env.example` to `.env` and apply the migration in `migrations/001_outbox.sql`.
-2. Build and run: `go run ./cmd/dispatcher` or use the `Dockerfile`.
+2. Build and run: `go build ./cmd/outbox-dispatcher` (binary `outbox-dispatcher`, on Windows `outbox-dispatcher.exe`) or use the `Dockerfile`.
 
 ## Configuration
 

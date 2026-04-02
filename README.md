@@ -9,7 +9,7 @@
 ## Быстрый старт
 
 1. Скопируйте `.env.example` в `.env` и примените миграцию из `migrations/001_outbox.sql`.
-2. Соберите и запустите: `go run ./cmd/dispatcher` или используйте `Dockerfile`.
+2. Соберите и запустите: `go build ./cmd/outbox-dispatcher` (бинарник `outbox-dispatcher`, в Windows — `outbox-dispatcher.exe`) или используйте `Dockerfile`.
 
 ## Конфигурация
 
