@@ -22,6 +22,7 @@ type Provider struct {
 	tokenURL   string
 	clientID   string
 	secret     string
+	scope      string // optional; sent when non-empty
 
 	cached    string
 	expiresAt time.Time
@@ -29,7 +30,8 @@ type Provider struct {
 
 // NewKeycloak creates a token provider. tokenURL must be the full OpenID token URL, e.g.
 // https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token
-func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret string) *Provider {
+// Requests use grant_type=client_credentials, client_id, client_secret (and optional scope).
+func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scope string) *Provider {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -38,6 +40,7 @@ func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret strin
 		tokenURL:   strings.TrimSpace(tokenURL),
 		clientID:   strings.TrimSpace(clientID),
 		secret:     strings.TrimSpace(clientSecret),
+		scope:      strings.TrimSpace(scope),
 	}
 }
 
@@ -59,6 +62,9 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", p.clientID)
 	form.Set("client_secret", p.secret)
+	if p.scope != "" {
+		form.Set("scope", p.scope)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -77,7 +83,7 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("keycloak token: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("keycloak token: %s", formatOAuthTokenError(resp.StatusCode, body))
 	}
 
 	var tr tokenResponse
@@ -95,4 +101,28 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 	p.expiresAt = time.Now().Add(time.Duration(exp) * time.Second)
 	logger.L.Printf("keycloak token refreshed (expires_in=%ds)", exp)
 	return p.cached, nil
+}
+
+type oauthTokenError struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
+}
+
+func formatOAuthTokenError(status int, body []byte) string {
+	s := strings.TrimSpace(string(body))
+	var oe oauthTokenError
+	if json.Unmarshal(body, &oe) == nil && (oe.Error != "" || oe.ErrorDescription != "") {
+		msg := fmt.Sprintf("HTTP %d", status)
+		if oe.Error != "" {
+			msg += ", " + oe.Error
+		}
+		if oe.ErrorDescription != "" {
+			msg += ": " + oe.ErrorDescription
+		}
+		return msg
+	}
+	if s == "" {
+		return fmt.Sprintf("HTTP %d (empty body)", status)
+	}
+	return fmt.Sprintf("HTTP %d: %s", status, s)
 }

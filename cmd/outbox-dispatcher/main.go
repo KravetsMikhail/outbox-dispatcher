@@ -41,7 +41,7 @@ func main() {
 	}
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
-	kc := token.NewKeycloak(httpClient, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret)
+	kc := token.NewKeycloak(httpClient, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakScope)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

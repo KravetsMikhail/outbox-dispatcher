@@ -31,6 +31,8 @@ type Config struct {
 	KeycloakTokenURL     string
 	KeycloakClientID     string
 	KeycloakClientSecret string
+	// KeycloakScope optional scope for token request (e.g. "openid" or a custom API scope).
+	KeycloakScope string
 
 	MaxRetryAttempts  int
 	RetryBaseInterval time.Duration
@@ -73,6 +75,7 @@ func Load() (*Config, error) {
 		KeycloakTokenURL:     strings.TrimSpace(os.Getenv("KEYCLOAK_TOKEN_URL")),
 		KeycloakClientID:     strings.TrimSpace(os.Getenv("KEYCLOAK_CLIENT_ID")),
 		KeycloakClientSecret: strings.TrimSpace(os.Getenv("KEYCLOAK_CLIENT_SECRET")),
+		KeycloakScope:        strings.TrimSpace(os.Getenv("KEYCLOAK_SCOPE")),
 	}
 
 	if cfg.OutboxTable == "" {
