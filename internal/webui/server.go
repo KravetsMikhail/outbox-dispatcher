@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"outbox-dispatcher/internal/appstatus"
 	"outbox-dispatcher/internal/config"
 	"outbox-dispatcher/internal/logger"
+	"outbox-dispatcher/internal/outbox"
 )
 
 // Start launches the dashboard on listenAddr (e.g. ":8484"). Stops when ctx is cancelled.
@@ -73,28 +75,49 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 	if pingErr != nil {
 		dbErr = "БД: " + pingErr.Error()
 	}
-	stats, total, errStats := loadStats(ctx, h.db, h.cfg.QualifiedOutboxTable())
-	if errStats != nil {
+
+	verifyErr := outbox.VerifyTable(ctx, h.db, h.cfg.QualifiedOutboxTable())
+	if verifyErr != nil {
 		if dbErr != "" {
 			dbErr += "; "
 		}
-		dbErr += "статистика: " + errStats.Error()
-		stats, total = nil, 0
+		dbErr += "таблица outbox (" + h.cfg.OutboxTableDisplay() + "): " + verifyErr.Error()
 	}
-	errRows, errErr := loadRecentErrors(ctx, h.db, h.cfg.QualifiedOutboxTable(), 50)
-	if errErr != nil {
-		if dbErr != "" {
-			dbErr += "; "
+
+	var stats []StatusRow
+	var total int64
+	var errStats error
+	if verifyErr == nil {
+		stats, total, errStats = loadStats(ctx, h.db, h.cfg.QualifiedOutboxTable())
+		if errStats != nil {
+			if dbErr != "" {
+				dbErr += "; "
+			}
+			dbErr += "статистика: " + errStats.Error()
+			stats, total = nil, 0
 		}
-		dbErr += "список ошибок: " + errErr.Error()
-		errRows = nil
 	}
-	pageOK := pingOK && errStats == nil && errErr == nil
+	var errRows []ErrorRow
+	var errErr error
+	if verifyErr == nil {
+		errRows, errErr = loadRecentErrors(ctx, h.db, h.cfg.QualifiedOutboxTable(), 50)
+		if errErr != nil {
+			if dbErr != "" {
+				dbErr += "; "
+			}
+			dbErr += "список ошибок: " + errErr.Error()
+			errRows = nil
+		}
+	}
+	pageOK := pingOK && verifyErr == nil && errStats == nil && errErr == nil
+
+	processErr := strings.TrimSpace(appstatus.ProcessError())
 
 	data := struct {
 		Uptime        string
 		DBOK          bool
 		DBErr         string
+		ProcessErr    string
 		Scheduler     string
 		Table         string
 		PostBase      string
@@ -105,8 +128,9 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt   string
 	}{
 		Uptime:        formatSince(h.startedAt),
-		DBOK:          pageOK,
+		DBOK:          pageOK && processErr == "",
 		DBErr:         dbErr,
+		ProcessErr:    processErr,
 		Scheduler:     SchedulerSummary(h.cfg),
 		Table:         h.cfg.OutboxTableDisplay(),
 		PostBase:      h.cfg.PostBaseURL,
@@ -168,6 +192,9 @@ a { color: var(--accent); }
 
 {{if .DBErr}}
 <p style="color:var(--err); font-size:0.9rem;">{{.DBErr}}</p>
+{{end}}
+{{if .ProcessErr}}
+<p style="color:var(--err); font-size:0.9rem;">Последняя ошибка обработчика: <span class="mono">{{.ProcessErr}}</span></p>
 {{end}}
 
 <h2>Статистика по статусам</h2>

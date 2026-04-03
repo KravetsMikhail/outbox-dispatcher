@@ -38,6 +38,9 @@ type Config struct {
 
 	// UIListenAddr e.g. ":8484" for the dashboard (empty = disabled)
 	UIListenAddr string
+
+	// SkipOutboxVerify skips startup check that the outbox table exists (OUTBOX_SKIP_VERIFY=true|1).
+	SkipOutboxVerify bool
 }
 
 func Load() (*Config, error) {
@@ -105,6 +108,9 @@ func Load() (*Config, error) {
 		}
 		cfg.TokenRetryDelay = d
 	}
+
+	skipVerify := strings.TrimSpace(os.Getenv("OUTBOX_SKIP_VERIFY"))
+	cfg.SkipOutboxVerify = strings.EqualFold(skipVerify, "true") || skipVerify == "1"
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("UI_DISABLE")), "true") || strings.TrimSpace(os.Getenv("UI_DISABLE")) == "1" {
 		cfg.UIListenAddr = ""

@@ -41,6 +41,17 @@ type TokenGetter interface {
 	BearerToken(ctx context.Context) (string, error)
 }
 
+// VerifyTable checks that qualifiedTable exists and is readable (SELECT COUNT(*)).
+// qualifiedTable must be a PostgreSQL-qualified identifier, e.g. "public"."outbox_messages".
+func VerifyTable(ctx context.Context, db *sql.DB, qualifiedTable string) error {
+	q := fmt.Sprintf(`SELECT COUNT(*) FROM %s`, qualifiedTable)
+	var n int64
+	if err := db.QueryRowContext(ctx, q).Scan(&n); err != nil {
+		return fmt.Errorf("%s: %w", qualifiedTable, err)
+	}
+	return nil
+}
+
 // ProcessPending claims pending rows (processing), POSTs payload, updates status.
 // qualifiedTable must be a PostgreSQL-qualified table name, e.g. "public"."outbox_messages" (see pqname.QualifiedTable).
 func ProcessPending(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string, tok TokenGetter, client *http.Client, opts ProcessOptions) error {

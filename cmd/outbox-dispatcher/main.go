@@ -12,6 +12,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/robfig/cron/v3"
 
+	"outbox-dispatcher/internal/appstatus"
 	"outbox-dispatcher/internal/config"
 	"outbox-dispatcher/internal/logger"
 	"outbox-dispatcher/internal/outbox"
@@ -57,7 +58,10 @@ func main() {
 			TokenRetryDelay:   cfg.TokenRetryDelay,
 		}
 		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, httpClient, opts); err != nil {
+			appstatus.SetProcessError(err)
 			logger.L.Printf("process pending: %v", err)
+		} else {
+			appstatus.SetProcessError(nil)
 		}
 	}
 
