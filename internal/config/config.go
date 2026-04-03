@@ -43,6 +43,9 @@ type Config struct {
 
 	// SkipOutboxVerify skips startup check that the outbox table exists (OUTBOX_SKIP_VERIFY=true|1).
 	SkipOutboxVerify bool
+
+	// PollLog logs every interval poll cycle (POLL_LOG=true|1); useful when debugging "silent" runs.
+	PollLog bool
 }
 
 func Load() (*Config, error) {
@@ -114,6 +117,9 @@ func Load() (*Config, error) {
 
 	skipVerify := strings.TrimSpace(os.Getenv("OUTBOX_SKIP_VERIFY"))
 	cfg.SkipOutboxVerify = strings.EqualFold(skipVerify, "true") || skipVerify == "1"
+
+	pollLog := strings.TrimSpace(os.Getenv("POLL_LOG"))
+	cfg.PollLog = strings.EqualFold(pollLog, "true") || pollLog == "1"
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("UI_DISABLE")), "true") || strings.TrimSpace(os.Getenv("UI_DISABLE")) == "1" {
 		cfg.UIListenAddr = ""

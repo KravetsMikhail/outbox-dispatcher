@@ -76,16 +76,25 @@ func main() {
 		defer c.Stop()
 	} else {
 		logger.L.Printf("scheduler: interval %s", cfg.PollInterval)
+		if !cfg.PollLog {
+			logger.L.Printf("poll: quiet when outbox has no pending rows (no Keycloak call); set POLL_LOG=1 to log each cycle")
+		}
 		t := time.NewTicker(cfg.PollInterval)
 		defer t.Stop()
 		go func() {
-			run()
 			for {
+				if cfg.PollLog {
+					logger.L.Printf("poll: cycle started")
+				}
+				t0 := time.Now()
+				run()
+				if cfg.PollLog {
+					logger.L.Printf("poll: cycle finished in %v", time.Since(t0))
+				}
 				select {
 				case <-ctx.Done():
 					return
 				case <-t.C:
-					run()
 				}
 			}
 		}()

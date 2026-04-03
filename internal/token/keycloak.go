@@ -72,9 +72,12 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
+	logger.L.Printf("keycloak token request: POST %s Content-Type=%s body=%s",
+		p.tokenURL, req.Header.Get("Content-Type"), redactedFormBodyForLog(form))
+
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("keycloak token POST %s: %w", p.tokenURL, err)
 	}
 	defer resp.Body.Close()
 
@@ -83,6 +86,8 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logger.L.Printf("keycloak token response: POST %s -> HTTP %d body=%s",
+			p.tokenURL, resp.StatusCode, truncateForLog(string(body), 2048))
 		return "", fmt.Errorf("keycloak token: %s", formatOAuthTokenError(resp.StatusCode, body))
 	}
 
@@ -106,6 +111,29 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 type oauthTokenError struct {
 	Error            string `json:"error"`
 	ErrorDescription string `json:"error_description"`
+}
+
+// redactedFormBodyForLog returns application/x-www-form-urlencoded body with client_secret masked.
+func redactedFormBodyForLog(form url.Values) string {
+	out := url.Values{}
+	for k, vals := range form {
+		if k == "client_secret" {
+			out.Set(k, "(redacted)")
+			continue
+		}
+		for _, v := range vals {
+			out.Add(k, v)
+		}
+	}
+	return out.Encode()
+}
+
+func truncateForLog(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "…"
 }
 
 func formatOAuthTokenError(status int, body []byte) string {
