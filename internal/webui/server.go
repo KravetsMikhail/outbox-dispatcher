@@ -73,7 +73,7 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 	if pingErr != nil {
 		dbErr = "БД: " + pingErr.Error()
 	}
-	stats, total, errStats := loadStats(ctx, h.db, h.cfg.OutboxTable)
+	stats, total, errStats := loadStats(ctx, h.db, h.cfg.QualifiedOutboxTable())
 	if errStats != nil {
 		if dbErr != "" {
 			dbErr += "; "
@@ -81,7 +81,7 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 		dbErr += "статистика: " + errStats.Error()
 		stats, total = nil, 0
 	}
-	errRows, errErr := loadRecentErrors(ctx, h.db, h.cfg.OutboxTable, 50)
+	errRows, errErr := loadRecentErrors(ctx, h.db, h.cfg.QualifiedOutboxTable(), 50)
 	if errErr != nil {
 		if dbErr != "" {
 			dbErr += "; "
@@ -108,7 +108,7 @@ func (h *handler) page(w http.ResponseWriter, r *http.Request) {
 		DBOK:          pageOK,
 		DBErr:         dbErr,
 		Scheduler:     SchedulerSummary(h.cfg),
-		Table:         h.cfg.OutboxTable,
+		Table:         h.cfg.OutboxTableDisplay(),
 		PostBase:      h.cfg.PostBaseURL,
 		KeycloakRealm: h.cfg.KeycloakRealm,
 		Stats:         stats,

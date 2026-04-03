@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+
+	"outbox-dispatcher/internal/pqname"
 )
 
 // Config holds runtime settings from environment and CLI.
@@ -17,7 +19,9 @@ type Config struct {
 	DatabaseURL string
 
 	PostBaseURL string
-	OutboxTable string
+	// OutboxSchema is the PostgreSQL schema for outbox_messages (default public).
+	OutboxSchema string
+	OutboxTable  string
 
 	CronExpr     string
 	PollInterval time.Duration
@@ -59,6 +63,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		PostBaseURL:          strings.TrimSpace(os.Getenv("POST_BASE_URL")),
+		OutboxSchema:         strings.TrimSpace(os.Getenv("OUTBOX_SCHEMA")),
 		OutboxTable:          strings.TrimSpace(os.Getenv("OUTBOX_TABLE")),
 		KeycloakBaseURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("KEYCLOAK_BASE_URL")), "/"),
 		KeycloakRealm:        strings.TrimSpace(os.Getenv("KEYCLOAK_REALM")),
@@ -69,6 +74,9 @@ func Load() (*Config, error) {
 
 	if cfg.OutboxTable == "" {
 		cfg.OutboxTable = "outbox_messages"
+	}
+	if cfg.OutboxSchema == "" {
+		cfg.OutboxSchema = "public"
 	}
 
 	cfg.MaxRetryAttempts = 10
@@ -160,4 +168,22 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// QualifiedOutboxTable returns "schema"."table" for SQL.
+func (c *Config) QualifiedOutboxTable() string {
+	return pqname.QualifiedTable(c.OutboxSchema, c.OutboxTable)
+}
+
+// OutboxTableDisplay returns schema.table for logs and UI (unquoted).
+func (c *Config) OutboxTableDisplay() string {
+	s := strings.TrimSpace(c.OutboxSchema)
+	if s == "" {
+		s = "public"
+	}
+	t := strings.TrimSpace(c.OutboxTable)
+	if t == "" {
+		t = "outbox_messages"
+	}
+	return s + "." + t
 }

@@ -36,7 +36,7 @@ docker run --rm -p 8484:8484 \
 
 ## Конфигурация
 
-Основные переменные: `DATABASE_URL`, `POST_BASE_URL`, параметры Keycloak (`KEYCLOAK_*` или `KEYCLOAK_TOKEN_URL`), расписание (`SCHEDULE_INTERVAL` или `SCHEDULE_CRON`), повторы (`MAX_RETRY_ATTEMPTS`, `RETRY_BASE_INTERVAL`, `TOKEN_RETRY_DELAY`), веб-интерфейс (`UI_LISTEN_ADDR`, `UI_DISABLE`). См. `.env.example`.
+Основные переменные: `DATABASE_URL`, `POST_BASE_URL`, схема и таблица outbox (`OUTBOX_SCHEMA`, по умолчанию `public`, и `OUTBOX_TABLE`, по умолчанию `outbox_messages`), параметры Keycloak (`KEYCLOAK_*` или `KEYCLOAK_TOKEN_URL`), расписание (`SCHEDULE_INTERVAL` или `SCHEDULE_CRON`), повторы (`MAX_RETRY_ATTEMPTS`, `RETRY_BASE_INTERVAL`, `TOKEN_RETRY_DELAY`), веб-интерфейс (`UI_LISTEN_ADDR`, `UI_DISABLE`). См. `.env.example`.
 
 Файл с переменными по умолчанию — `.env` в текущей директории (если файла нет, он просто пропускается). Другой файл можно указать при запуске: `-env=path/to/.env` или `-env path/to/.env` — в этом случае файл должен существовать.
 

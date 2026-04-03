@@ -42,7 +42,8 @@ type TokenGetter interface {
 }
 
 // ProcessPending claims pending rows (processing), POSTs payload, updates status.
-func ProcessPending(ctx context.Context, db *sql.DB, table, baseURL string, tok TokenGetter, client *http.Client, opts ProcessOptions) error {
+// qualifiedTable must be a PostgreSQL-qualified table name, e.g. "public"."outbox_messages" (see pqname.QualifiedTable).
+func ProcessPending(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string, tok TokenGetter, client *http.Client, opts ProcessOptions) error {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -65,7 +66,7 @@ func ProcessPending(ctx context.Context, db *sql.DB, table, baseURL string, tok 
 		) AS sub
 		WHERE o.id = sub.id
 		RETURNING o.id, o.payload, o.metadata, o.retry_count
-	`, quoteIdent(table), quoteIdent(table))
+	`, qualifiedTable, qualifiedTable)
 
 	now := time.Now().UTC()
 	rows, err := tx.QueryContext(ctx, q, StatusProcessing, now, StatusPending, now)
@@ -90,45 +91,45 @@ func ProcessPending(ctx context.Context, db *sql.DB, table, baseURL string, tok 
 	}
 
 	for _, r := range list {
-		if err := dispatchOne(ctx, db, table, baseURL, tok, client, r, opts); err != nil {
+		if err := dispatchOne(ctx, db, qualifiedTable, baseURL, tok, client, r, opts); err != nil {
 			logger.L.Printf("row id=%d: %v", r.ID, err)
 		}
 	}
 	return nil
 }
 
-func dispatchOne(ctx context.Context, db *sql.DB, table, baseURL string, tok TokenGetter, client *http.Client, r Row, opts ProcessOptions) error {
+func dispatchOne(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string, tok TokenGetter, client *http.Client, r Row, opts ProcessOptions) error {
 	target, err := buildTargetURL(baseURL, r.Metadata)
 	if err != nil {
-		return markFailed(ctx, db, table, r.ID, truncateErr(err.Error(), errDetailsMaxLen))
+		return markFailed(ctx, db, qualifiedTable, r.ID, truncateErr(err.Error(), errDetailsMaxLen))
 	}
 	var t string
 	if tok != nil {
 		var err error
 		t, err = tok.BearerToken(ctx)
 		if err != nil {
-			return requeueTokenIssue(ctx, db, table, r.ID, fmt.Sprintf("keycloak: %v", err), opts.TokenRetryDelay)
+			return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, fmt.Sprintf("keycloak: %v", err), opts.TokenRetryDelay)
 		}
 	}
 	if strings.TrimSpace(t) == "" {
-		return requeueTokenIssue(ctx, db, table, r.ID, "no bearer token", opts.TokenRetryDelay)
+		return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, "no bearer token", opts.TokenRetryDelay)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(r.Payload)))
 	if err != nil {
-		return markFailed(ctx, db, table, r.ID, truncateErr(err.Error(), errDetailsMaxLen))
+		return markFailed(ctx, db, qualifiedTable, r.ID, truncateErr(err.Error(), errDetailsMaxLen))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+t)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return recordHTTPFailure(ctx, db, table, r, opts, fmt.Sprintf("post: %v", err))
+		return recordHTTPFailure(ctx, db, qualifiedTable, r, opts, fmt.Sprintf("post: %v", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		if err := markSent(ctx, db, table, r.ID); err != nil {
+		if err := markSent(ctx, db, qualifiedTable, r.ID); err != nil {
 			return err
 		}
 		logger.L.Printf("row id=%d: sent %s -> %d", r.ID, target, resp.StatusCode)
@@ -137,41 +138,41 @@ func dispatchOne(ctx context.Context, db *sql.DB, table, baseURL string, tok Tok
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	msg := fmt.Sprintf("http %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	return recordHTTPFailure(ctx, db, table, r, opts, msg)
+	return recordHTTPFailure(ctx, db, qualifiedTable, r, opts, msg)
 }
 
-func markSent(ctx context.Context, db *sql.DB, table string, id int64) error {
+func markSent(ctx context.Context, db *sql.DB, qualifiedTable string, id int64) error {
 	q := fmt.Sprintf(`
 		UPDATE %s
 		SET status = $1, error_details = NULL, next_retry_date = NULL, updated_at = $2
 		WHERE id = $3
-	`, quoteIdent(table))
+	`, qualifiedTable)
 	_, err := db.ExecContext(ctx, q, StatusSent, time.Now().UTC(), id)
 	return err
 }
 
-func markFailed(ctx context.Context, db *sql.DB, table string, id int64, details string) error {
+func markFailed(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string) error {
 	q := fmt.Sprintf(`
 		UPDATE %s
 		SET status = $1, error_details = $2, next_retry_date = NULL, updated_at = $3
 		WHERE id = $4
-	`, quoteIdent(table))
+	`, qualifiedTable)
 	_, err := db.ExecContext(ctx, q, StatusFailed, truncateErr(details, errDetailsMaxLen), time.Now().UTC(), id)
 	return err
 }
 
-func requeueTokenIssue(ctx context.Context, db *sql.DB, table string, id int64, details string, delay time.Duration) error {
+func requeueTokenIssue(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string, delay time.Duration) error {
 	next := time.Now().UTC().Add(delay)
 	q := fmt.Sprintf(`
 		UPDATE %s
 		SET status = $1, error_details = $2, next_retry_date = $3, updated_at = $4
 		WHERE id = $5
-	`, quoteIdent(table))
+	`, qualifiedTable)
 	_, err := db.ExecContext(ctx, q, StatusPending, truncateErr(details, errDetailsMaxLen), next, time.Now().UTC(), id)
 	return err
 }
 
-func recordHTTPFailure(ctx context.Context, db *sql.DB, table string, r Row, opts ProcessOptions, details string) error {
+func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r Row, opts ProcessOptions, details string) error {
 	details = truncateErr(details, errDetailsMaxLen)
 	newCount := r.RetryCount + 1
 	if opts.MaxRetryAttempts > 0 && newCount > opts.MaxRetryAttempts {
@@ -179,7 +180,7 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, table string, r Row, opt
 			UPDATE %s
 			SET status = $1, retry_count = $2, error_details = $3, next_retry_date = NULL, updated_at = $4
 			WHERE id = $5
-		`, quoteIdent(table))
+		`, qualifiedTable)
 		_, err := db.ExecContext(ctx, q, StatusFailed, newCount, details, time.Now().UTC(), r.ID)
 		if err != nil {
 			return err
@@ -192,7 +193,7 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, table string, r Row, opt
 		UPDATE %s
 		SET status = $1, retry_count = $2, error_details = $3, next_retry_date = $4, updated_at = $5
 		WHERE id = $6
-	`, quoteIdent(table))
+	`, qualifiedTable)
 	_, err := db.ExecContext(ctx, q, StatusPending, newCount, details, next, time.Now().UTC(), r.ID)
 	if err != nil {
 		return err
@@ -259,12 +260,4 @@ func buildTargetURL(baseURL string, meta sql.NullString) (string, error) {
 		return "", fmt.Errorf("metadata must contain \"name\" or \"path\"")
 	}
 	return base + path, nil
-}
-
-func quoteIdent(name string) string {
-	if name == "" {
-		return `"outbox_messages"`
-	}
-	s := strings.ReplaceAll(name, `"`, `""`)
-	return `"` + s + `"`
 }

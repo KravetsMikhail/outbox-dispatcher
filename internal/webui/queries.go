@@ -30,8 +30,8 @@ func pingDB(ctx context.Context, db *sql.DB) error {
 	return db.PingContext(ctx)
 }
 
-func loadStats(ctx context.Context, db *sql.DB, table string) ([]StatusRow, int64, error) {
-	q := fmt.Sprintf(`SELECT status, COUNT(*) FROM %s GROUP BY status ORDER BY status`, quoteIdent(table))
+func loadStats(ctx context.Context, db *sql.DB, qualifiedTable string) ([]StatusRow, int64, error) {
+	q := fmt.Sprintf(`SELECT status, COUNT(*) FROM %s GROUP BY status ORDER BY status`, qualifiedTable)
 	rows, err := db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, 0, err
@@ -50,7 +50,7 @@ func loadStats(ctx context.Context, db *sql.DB, table string) ([]StatusRow, int6
 	return out, total, rows.Err()
 }
 
-func loadRecentErrors(ctx context.Context, db *sql.DB, table string, limit int) ([]ErrorRow, error) {
+func loadRecentErrors(ctx context.Context, db *sql.DB, qualifiedTable string, limit int) ([]ErrorRow, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
@@ -69,7 +69,7 @@ func loadRecentErrors(ctx context.Context, db *sql.DB, table string, limit int) 
 		   OR status = $1
 		ORDER BY COALESCE(updated_at, created_at) DESC NULLS LAST
 		LIMIT $2
-	`, quoteIdent(table))
+	`, qualifiedTable)
 	rows, err := db.QueryContext(ctx, q, "failed", limit)
 	if err != nil {
 		return nil, err

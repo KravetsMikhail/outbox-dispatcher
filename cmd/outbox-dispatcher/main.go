@@ -56,7 +56,7 @@ func main() {
 			RetryBaseInterval: cfg.RetryBaseInterval,
 			TokenRetryDelay:   cfg.TokenRetryDelay,
 		}
-		if err := outbox.ProcessPending(cctx, db, cfg.OutboxTable, cfg.PostBaseURL, kc, httpClient, opts); err != nil {
+		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, httpClient, opts); err != nil {
 			logger.L.Printf("process pending: %v", err)
 		}
 	}

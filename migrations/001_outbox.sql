@@ -1,4 +1,5 @@
--- Outbox messages (PostgreSQL)
+-- Outbox messages (PostgreSQL, default schema public).
+-- For another schema: CREATE SCHEMA IF NOT EXISTS myapp; then CREATE TABLE myapp.outbox_messages (...)
 CREATE TABLE IF NOT EXISTS outbox_messages (
     id BIGSERIAL PRIMARY KEY,
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
