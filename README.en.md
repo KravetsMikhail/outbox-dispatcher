@@ -11,6 +11,29 @@ A small **web dashboard** (default port **8484**) shows process health, per-stat
 1. Copy `.env.example` to `.env` and apply the migration in `migrations/001_outbox.sql`.
 2. Build and run: `go build ./cmd/outbox-dispatcher` (binary `outbox-dispatcher`, on Windows `outbox-dispatcher.exe`) or use the `Dockerfile`.
 
+### Docker and a custom `.env`
+
+The image **does not embed** an `.env` file — you supply configuration when starting the container.
+
+**Option 1 — inject variables from a file** (handy for `.env.prod`):
+
+```bash
+docker build -t outbox-dispatcher .
+docker run --rm -p 8484:8484 --env-file .env.prod outbox-dispatcher
+```
+
+Docker injects key/value pairs into the process; no file has to exist inside the image.
+
+**Option 2 — mount a file and pass `-env`** (loaded via `godotenv`, same as locally):
+
+```bash
+docker run --rm -p 8484:8484 \
+  -v /absolute/path/.env.prod:/app/.env.prod:ro \
+  outbox-dispatcher -env=/app/.env.prod
+```
+
+The working directory in the image is `/app` (see `Dockerfile`).
+
 ## Configuration
 
 Main variables: `DATABASE_URL`, `POST_BASE_URL`, Keycloak settings (`KEYCLOAK_*` or `KEYCLOAK_TOKEN_URL`), schedule (`SCHEDULE_INTERVAL` or `SCHEDULE_CRON`), retries (`MAX_RETRY_ATTEMPTS`, `RETRY_BASE_INTERVAL`, `TOKEN_RETRY_DELAY`), and the web UI (`UI_LISTEN_ADDR`, `UI_DISABLE`). See `.env.example`.
