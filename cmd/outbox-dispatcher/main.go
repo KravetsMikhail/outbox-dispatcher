@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"net/http"
 	"os"
@@ -27,6 +28,9 @@ func main() {
 	if err != nil {
 		logger.L.Fatalf("config: %v", err)
 	}
+	if cfg.KeycloakTLSInsecure {
+		logger.L.Printf("warning: KEYCLOAK_TLS_INSECURE_SKIP_VERIFY enabled (Keycloak token requests only; do not use in production)")
+	}
 
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
@@ -40,8 +44,9 @@ func main() {
 		logger.L.Fatalf("db ping: %v", err)
 	}
 
-	httpClient := &http.Client{Timeout: 60 * time.Second}
-	kc := token.NewKeycloak(httpClient, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakScope)
+	apiHTTP := &http.Client{Timeout: 60 * time.Second}
+	kcHTTP := keycloakHTTPClient(cfg)
+	kc := token.NewKeycloak(kcHTTP, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakScope, cfg.KeycloakUserAgent)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -59,7 +64,7 @@ func main() {
 			StaleProcessingRecovery:   cfg.StaleProcessingRecovery,
 			VerbosePoll:               cfg.PollLog,
 		}
-		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, httpClient, opts); err != nil {
+		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, apiHTTP, opts); err != nil {
 			appstatus.SetProcessError(err)
 			logger.L.Printf("process pending: %v", err)
 		} else {
@@ -107,4 +112,25 @@ func main() {
 	<-sig
 	logger.L.Printf("shutdown")
 	cancel()
+}
+
+// keycloakHTTPClient is only for the token endpoint (TLS options do not affect POST_BASE_URL).
+func keycloakHTTPClient(cfg *config.Config) *http.Client {
+	c := &http.Client{Timeout: 60 * time.Second}
+	if !cfg.KeycloakTLSInsecure {
+		return c
+	}
+	tr, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return c
+	}
+	t2 := tr.Clone()
+	if t2.TLSClientConfig == nil {
+		t2.TLSClientConfig = &tls.Config{}
+	} else {
+		t2.TLSClientConfig = t2.TLSClientConfig.Clone()
+	}
+	t2.TLSClientConfig.InsecureSkipVerify = true
+	c.Transport = t2
+	return c
 }

@@ -33,6 +33,10 @@ type Config struct {
 	KeycloakClientSecret string
 	// KeycloakScope optional scope for token request (e.g. "openid" or a custom API scope).
 	KeycloakScope string
+	// KeycloakTLSInsecure skips TLS verify for token requests only (KEYCLOAK_TLS_INSECURE_SKIP_VERIFY; dev only).
+	KeycloakTLSInsecure bool
+	// KeycloakUserAgent optional User-Agent for token POST (some proxies block Go-http-client).
+	KeycloakUserAgent string
 
 	MaxRetryAttempts  int
 	RetryBaseInterval time.Duration
@@ -82,7 +86,11 @@ func Load() (*Config, error) {
 		KeycloakClientID:     strings.TrimSpace(os.Getenv("KEYCLOAK_CLIENT_ID")),
 		KeycloakClientSecret: strings.TrimSpace(os.Getenv("KEYCLOAK_CLIENT_SECRET")),
 		KeycloakScope:        strings.TrimSpace(os.Getenv("KEYCLOAK_SCOPE")),
+		KeycloakUserAgent:    strings.TrimSpace(os.Getenv("KEYCLOAK_HTTP_USER_AGENT")),
 	}
+
+	kcTLS := strings.TrimSpace(os.Getenv("KEYCLOAK_TLS_INSECURE_SKIP_VERIFY"))
+	cfg.KeycloakTLSInsecure = strings.EqualFold(kcTLS, "true") || kcTLS == "1"
 
 	if cfg.OutboxTable == "" {
 		cfg.OutboxTable = "outbox_messages"

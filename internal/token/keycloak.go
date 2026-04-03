@@ -23,6 +23,7 @@ type Provider struct {
 	clientID   string
 	secret     string
 	scope      string // optional; sent when non-empty
+	userAgent  string // optional; sent when non-empty
 
 	cached    string
 	expiresAt time.Time
@@ -31,7 +32,7 @@ type Provider struct {
 // NewKeycloak creates a token provider. tokenURL must be the full OpenID token URL, e.g.
 // https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token
 // Requests use grant_type=client_credentials, client_id, client_secret (and optional scope).
-func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scope string) *Provider {
+func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scope, userAgent string) *Provider {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -41,6 +42,7 @@ func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scop
 		clientID:   strings.TrimSpace(clientID),
 		secret:     strings.TrimSpace(clientSecret),
 		scope:      strings.TrimSpace(scope),
+		userAgent:  strings.TrimSpace(userAgent),
 	}
 }
 
@@ -71,6 +73,10 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if p.userAgent != "" {
+		req.Header.Set("User-Agent", p.userAgent)
+	}
 
 	logger.L.Printf("keycloak token request: POST %s Content-Type=%s body=%s",
 		p.tokenURL, req.Header.Get("Content-Type"), redactedFormBodyForLog(form))
@@ -80,6 +86,8 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("keycloak token POST %s: %w", p.tokenURL, err)
 	}
 	defer resp.Body.Close()
+
+	p.logRedirectMismatch(resp)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
@@ -134,6 +142,23 @@ func truncateForLog(s string, max int) string {
 		return s
 	}
 	return s[:max] + "…"
+}
+
+// logRedirectMismatch explains the common curl-vs-Go gap: net/http may follow redirects with GET, dropping the form body.
+func (p *Provider) logRedirectMismatch(resp *http.Response) {
+	if resp == nil || resp.Request == nil {
+		return
+	}
+	if resp.Request.Method != http.MethodPost {
+		logger.L.Printf("keycloak token: final request was %s %q (expected POST) — redirect likely dropped the form body; set KEYCLOAK_TOKEN_URL to the final URL (see curl -v Location / no redirect)",
+			resp.Request.Method, resp.Request.URL.String())
+		return
+	}
+	final := strings.TrimSuffix(resp.Request.URL.String(), "/")
+	want := strings.TrimSuffix(p.tokenURL, "/")
+	if final != want {
+		logger.L.Printf("keycloak token: final URL %q differs from configured %q (redirect); if auth fails, use the exact token endpoint URL", final, p.tokenURL)
+	}
 }
 
 func formatOAuthTokenError(status int, body []byte) string {
