@@ -40,6 +40,33 @@ Main variables: `DATABASE_URL`, `POST_BASE_URL`, Keycloak settings (`KEYCLOAK_*`
 
 By default the process loads `.env` in the working directory (a missing file is ignored). To use another file, pass `-env=path/to/.env` or `-env path/to/.env` — that file must exist.
 
+## The `metadata` column in `outbox_messages`
+
+The **`metadata`** column is **required** for a successful delivery: it must contain **valid JSON** that defines the HTTP path via **`name`** and/or **`path`** (if both are set, **`path`** wins):
+
+| Field | Purpose |
+|-------|---------|
+| **`name`** | Relative path appended to `POST_BASE_URL` (slashes inside the value are allowed). Example: `"orders/create"` → path `/orders/create`. |
+| **`path`** | Absolute path from the host root; should start with `/` (a leading slash is added if missing). Example: `"/v1/events"`. |
+
+The final URL is **`POST_BASE_URL`** (trailing slash trimmed) **+** the path from `metadata`. The **POST** body comes from the **`payload`** column (JSON).
+
+Example `metadata` values:
+
+```json
+{"name": "orders/create"}
+```
+
+With `POST_BASE_URL=https://api.example.com` the request goes to `https://api.example.com/orders/create`.
+
+```json
+{"path": "/v1/notifications"}
+```
+
+With `POST_BASE_URL=https://api.example.com` the request goes to `https://api.example.com/v1/notifications`. If `POST_BASE_URL` already includes a path prefix (e.g. `https://api.example.com/api`), `path` or `name` is appended as described above.
+
+If neither `name` nor `path` is set, processing fails and the row ends in **`failed`** (invalid `metadata`).
+
 ## License
 
 See [LICENSE](LICENSE).
