@@ -41,6 +41,8 @@ type Config struct {
 	MaxRetryAttempts  int
 	RetryBaseInterval time.Duration
 	TokenRetryDelay   time.Duration
+	// RetryMaxBackoff caps next_retry_date delay for HTTP exponential backoff and token requeue (RETRY_MAX_BACKOFF, default 1h).
+	RetryMaxBackoff time.Duration
 
 	// UIListenAddr e.g. ":8484" for the dashboard (empty = disabled)
 	UIListenAddr string
@@ -124,6 +126,15 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("TOKEN_RETRY_DELAY: %w", err)
 		}
 		cfg.TokenRetryDelay = d
+	}
+
+	cfg.RetryMaxBackoff = time.Hour
+	if s := strings.TrimSpace(os.Getenv("RETRY_MAX_BACKOFF")); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("RETRY_MAX_BACKOFF: must be a positive duration, got %q", s)
+		}
+		cfg.RetryMaxBackoff = d
 	}
 
 	if s := strings.TrimSpace(os.Getenv("OUTBOX_STALE_PROCESSING_AFTER")); s != "" {

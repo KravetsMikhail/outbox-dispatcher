@@ -28,6 +28,8 @@ type ProcessOptions struct {
 	MaxRetryAttempts  int           // after this many failures (retry_count), row becomes failed; 0 = unlimited
 	RetryBaseInterval time.Duration // base for exponential backoff between HTTP retries
 	TokenRetryDelay   time.Duration // delay before retry when token is missing / Keycloak error (0 = eligible on next poll)
+	// RetryMaxBackoff upper bound for next_retry_date (HTTP backoff and token requeue); 0 treated as 1h inside retryBackoff.
+	RetryMaxBackoff time.Duration
 	// StaleProcessingRecovery resets status=processing rows whose updated_at is older than this; 0 = disabled.
 	StaleProcessingRecovery time.Duration
 	// VerbosePoll logs when no rows are claimed (explains next_retry_date / processing).
@@ -140,11 +142,11 @@ func dispatchOne(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string
 		var err error
 		t, err = tok.BearerToken(ctx)
 		if err != nil {
-			return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, fmt.Sprintf("keycloak: %v", err), opts.TokenRetryDelay)
+			return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, fmt.Sprintf("keycloak: %v", err), opts.TokenRetryDelay, opts.RetryMaxBackoff)
 		}
 	}
 	if strings.TrimSpace(t) == "" {
-		return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, "no bearer token", opts.TokenRetryDelay)
+		return requeueTokenIssue(ctx, db, qualifiedTable, r.ID, "no bearer token", opts.TokenRetryDelay, opts.RetryMaxBackoff)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(r.Payload)))
@@ -193,7 +195,8 @@ func markFailed(ctx context.Context, db *sql.DB, qualifiedTable string, id int64
 	return err
 }
 
-func requeueTokenIssue(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string, delay time.Duration) error {
+func requeueTokenIssue(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string, delay, maxDelay time.Duration) error {
+	delay = clampNextRetryDelay(delay, maxDelay)
 	// next_retry_date = NOW() + delay using DB clock (matches claim predicate next_retry_date <= NOW())
 	q := fmt.Sprintf(`
 		UPDATE %s
@@ -206,7 +209,7 @@ func requeueTokenIssue(ctx context.Context, db *sql.DB, qualifiedTable string, i
 	err := db.QueryRowContext(ctx, q,
 		StatusPending,
 		truncateErr(details, errDetailsMaxLen),
-		delay.Seconds(),
+		delaySecondsForPG(delay),
 		id,
 	).Scan(&next)
 	if err != nil {
@@ -254,7 +257,7 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r
 		logger.L.Printf("row id=%d: failed after %d attempt(s): %s", r.ID, newCount, details)
 		return nil
 	}
-	backoff := retryBackoff(newCount, opts.RetryBaseInterval)
+	backoff := retryBackoff(newCount, opts.RetryBaseInterval, opts.RetryMaxBackoff)
 	q := fmt.Sprintf(`
 		UPDATE %s
 		SET status = $1, retry_count = $2, error_details = $3,
@@ -263,7 +266,7 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r
 		RETURNING next_retry_date
 	`, qualifiedTable)
 	var next sql.NullTime
-	err := db.QueryRowContext(ctx, q, StatusPending, newCount, details, backoff.Seconds(), r.ID).Scan(&next)
+	err := db.QueryRowContext(ctx, q, StatusPending, newCount, details, delaySecondsForPG(backoff), r.ID).Scan(&next)
 	if err != nil {
 		return err
 	}
@@ -275,26 +278,66 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r
 	return nil
 }
 
-func retryBackoff(retryCount int, base time.Duration) time.Duration {
+// retryBackoff returns base * 2^(min(retryCount-1, 11)), clamped to [5s, maxBackoff].
+// Uses float64 seconds so large RETRY_BASE_INTERVAL * exp does not overflow time.Duration.
+func retryBackoff(retryCount int, base, maxBackoff time.Duration) time.Duration {
+	const minBackoff = 5 * time.Second
+	if maxBackoff <= 0 {
+		maxBackoff = time.Hour
+	}
 	if base <= 0 {
 		base = 30 * time.Second
 	}
-	// exponential: base * 2^(retryCount-1), capped at 1h
+	if base > maxBackoff {
+		base = maxBackoff
+	}
 	exp := 1
 	for i := 1; i < retryCount && i < 12; i++ {
 		exp *= 2
 		if exp > 65536 {
+			exp = 65536
 			break
 		}
 	}
-	d := base * time.Duration(exp)
-	if d < 5*time.Second {
-		d = 5 * time.Second
+	sec := base.Seconds() * float64(exp)
+	maxS := maxBackoff.Seconds()
+	minS := minBackoff.Seconds()
+	if maxS < minS {
+		minS = maxS
 	}
-	if d > time.Hour {
-		d = time.Hour
+	if sec > maxS {
+		sec = maxS
+	}
+	if sec < minS {
+		sec = minS
+	}
+	return time.Duration(sec * float64(time.Second))
+}
+
+func clampNextRetryDelay(d, max time.Duration) time.Duration {
+	if d < 0 {
+		d = 0
+	}
+	maxB := max
+	if maxB <= 0 {
+		maxB = time.Hour
+	}
+	if d > maxB {
+		return maxB
 	}
 	return d
+}
+
+// delaySecondsForPG converts delay to seconds for INTERVAL multiplication (non-negative, finite).
+func delaySecondsForPG(d time.Duration) float64 {
+	if d < 0 {
+		return 0
+	}
+	s := d.Seconds()
+	if s != s || s > 1e9 { // NaN or absurd
+		return 0
+	}
+	return s
 }
 
 func truncateErr(s string, max int) string {

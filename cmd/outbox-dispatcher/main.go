@@ -61,6 +61,7 @@ func main() {
 			MaxRetryAttempts:          cfg.MaxRetryAttempts,
 			RetryBaseInterval:         cfg.RetryBaseInterval,
 			TokenRetryDelay:           cfg.TokenRetryDelay,
+			RetryMaxBackoff:           cfg.RetryMaxBackoff,
 			StaleProcessingRecovery:   cfg.StaleProcessingRecovery,
 			VerbosePoll:               cfg.PollLog,
 		}
