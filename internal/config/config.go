@@ -37,13 +37,20 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	_ = godotenv.Load()
-
 	var (
+		envFile      = flag.String("env", "", "path to env file; if set, file must exist. If omitted, loads .env when present (missing .env is ignored)")
 		scheduleFlag = flag.String("schedule", "", "poll interval, e.g. 30s, 1m (overrides SCHEDULE_INTERVAL)")
 		cronFlag     = flag.String("cron", "", "cron expression, e.g. */5 * * * * (overrides SCHEDULE_CRON)")
 	)
 	flag.Parse()
+
+	if path := strings.TrimSpace(*envFile); path != "" {
+		if err := godotenv.Load(path); err != nil {
+			return nil, fmt.Errorf("env file %q: %w", path, err)
+		}
+	} else {
+		_ = godotenv.Load(".env")
+	}
 
 	if strings.TrimSpace(*cronFlag) != "" && strings.TrimSpace(*scheduleFlag) != "" {
 		return nil, errors.New("use only one of -cron or -schedule")

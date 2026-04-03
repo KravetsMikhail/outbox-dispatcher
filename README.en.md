@@ -15,6 +15,8 @@ A small **web dashboard** (default port **8484**) shows process health, per-stat
 
 Main variables: `DATABASE_URL`, `POST_BASE_URL`, Keycloak settings (`KEYCLOAK_*` or `KEYCLOAK_TOKEN_URL`), schedule (`SCHEDULE_INTERVAL` or `SCHEDULE_CRON`), retries (`MAX_RETRY_ATTEMPTS`, `RETRY_BASE_INTERVAL`, `TOKEN_RETRY_DELAY`), and the web UI (`UI_LISTEN_ADDR`, `UI_DISABLE`). See `.env.example`.
 
+By default the process loads `.env` in the working directory (a missing file is ignored). To use another file, pass `-env=path/to/.env` or `-env path/to/.env` — that file must exist.
+
 ## License
 
 See [LICENSE](LICENSE).
