@@ -53,9 +53,11 @@ func main() {
 		cctx, ccancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer ccancel()
 		opts := outbox.ProcessOptions{
-			MaxRetryAttempts:  cfg.MaxRetryAttempts,
-			RetryBaseInterval: cfg.RetryBaseInterval,
-			TokenRetryDelay:   cfg.TokenRetryDelay,
+			MaxRetryAttempts:          cfg.MaxRetryAttempts,
+			RetryBaseInterval:         cfg.RetryBaseInterval,
+			TokenRetryDelay:           cfg.TokenRetryDelay,
+			StaleProcessingRecovery:   cfg.StaleProcessingRecovery,
+			VerbosePoll:               cfg.PollLog,
 		}
 		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, httpClient, opts); err != nil {
 			appstatus.SetProcessError(err)

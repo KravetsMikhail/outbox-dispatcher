@@ -46,6 +46,9 @@ type Config struct {
 
 	// PollLog logs every interval poll cycle (POLL_LOG=true|1); useful when debugging "silent" runs.
 	PollLog bool
+
+	// StaleProcessingRecovery resets rows left in status=processing longer than this (OUTBOX_STALE_PROCESSING_AFTER); 0 = off.
+	StaleProcessingRecovery time.Duration
 }
 
 func Load() (*Config, error) {
@@ -109,10 +112,18 @@ func Load() (*Config, error) {
 	cfg.TokenRetryDelay = 30 * time.Second
 	if s := strings.TrimSpace(os.Getenv("TOKEN_RETRY_DELAY")); s != "" {
 		d, err := time.ParseDuration(s)
-		if err != nil || d <= 0 {
+		if err != nil || d < 0 {
 			return nil, fmt.Errorf("TOKEN_RETRY_DELAY: %w", err)
 		}
 		cfg.TokenRetryDelay = d
+	}
+
+	if s := strings.TrimSpace(os.Getenv("OUTBOX_STALE_PROCESSING_AFTER")); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("OUTBOX_STALE_PROCESSING_AFTER: must be a positive duration, got %q", s)
+		}
+		cfg.StaleProcessingRecovery = d
 	}
 
 	skipVerify := strings.TrimSpace(os.Getenv("OUTBOX_SKIP_VERIFY"))

@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS outbox_messages (
     payload JSONB NOT NULL,
     metadata JSONB,
     retry_count INTEGER NOT NULL DEFAULT 0,
-    next_retry_date TIMESTAMPTZ,
+    next_retry_date TIMESTAMPTZ, -- do not use TIMESTAMP without TZ: scheduling uses NOW() in the DB
     error_details TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ

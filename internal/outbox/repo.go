@@ -27,7 +27,11 @@ const errDetailsMaxLen = 8000
 type ProcessOptions struct {
 	MaxRetryAttempts  int           // after this many failures (retry_count), row becomes failed; 0 = unlimited
 	RetryBaseInterval time.Duration // base for exponential backoff between HTTP retries
-	TokenRetryDelay   time.Duration // delay before retry when token is missing / Keycloak error
+	TokenRetryDelay   time.Duration // delay before retry when token is missing / Keycloak error (0 = eligible on next poll)
+	// StaleProcessingRecovery resets status=processing rows whose updated_at is older than this; 0 = disabled.
+	StaleProcessingRecovery time.Duration
+	// VerbosePoll logs when no rows are claimed (explains next_retry_date / processing).
+	VerbosePoll bool
 }
 
 type Row struct {
@@ -58,19 +62,29 @@ func ProcessPending(ctx context.Context, db *sql.DB, qualifiedTable, baseURL str
 	if client == nil {
 		client = http.DefaultClient
 	}
+	nRecovered, err := recoverStaleProcessing(ctx, db, qualifiedTable, opts.StaleProcessingRecovery)
+	if err != nil {
+		return fmt.Errorf("recover stale processing: %w", err)
+	}
+	if nRecovered > 0 {
+		logger.L.Printf("outbox: reset %d stale processing row(s) (OUTBOX_STALE_PROCESSING_AFTER)", nRecovered)
+	}
+
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Use PostgreSQL NOW() for eligibility and updated_at so scheduling matches the DB clock
+	// (avoids app↔DB clock skew and timezone surprises vs passing Go time as parameters).
 	q := fmt.Sprintf(`
 		UPDATE %s AS o
-		SET status = $1, updated_at = $2
+		SET status = $1, updated_at = NOW()
 		FROM (
 			SELECT id FROM %s
-			WHERE status = $3
-			  AND (next_retry_date IS NULL OR next_retry_date <= $4)
+			WHERE status = $2
+			  AND (next_retry_date IS NULL OR next_retry_date <= NOW())
 			ORDER BY id
 			FOR UPDATE SKIP LOCKED
 			LIMIT 50
@@ -79,8 +93,7 @@ func ProcessPending(ctx context.Context, db *sql.DB, qualifiedTable, baseURL str
 		RETURNING o.id, o.payload, o.metadata, o.retry_count
 	`, qualifiedTable, qualifiedTable)
 
-	now := time.Now().UTC()
-	rows, err := tx.QueryContext(ctx, q, StatusProcessing, now, StatusPending, now)
+	rows, err := tx.QueryContext(ctx, q, StatusProcessing, StatusPending)
 	if err != nil {
 		return err
 	}
@@ -99,6 +112,14 @@ func ProcessPending(ctx context.Context, db *sql.DB, qualifiedTable, baseURL str
 	}
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+
+	if opts.VerbosePoll {
+		if len(list) == 0 {
+			logger.L.Printf("process pending: claimed 0 rows — eligible only if status=pending AND (next_retry_date IS NULL OR next_retry_date <= NOW() in DB); after Keycloak errors rows wait TOKEN_RETRY_DELAY; crash mid-dispatch leaves status=processing (use OUTBOX_STALE_PROCESSING_AFTER)")
+		} else {
+			logger.L.Printf("process pending: claimed %d row(s)", len(list))
+		}
 	}
 
 	for _, r := range list {
@@ -155,32 +176,66 @@ func dispatchOne(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string
 func markSent(ctx context.Context, db *sql.DB, qualifiedTable string, id int64) error {
 	q := fmt.Sprintf(`
 		UPDATE %s
-		SET status = $1, error_details = NULL, next_retry_date = NULL, updated_at = $2
-		WHERE id = $3
+		SET status = $1, error_details = NULL, next_retry_date = NULL, updated_at = NOW()
+		WHERE id = $2
 	`, qualifiedTable)
-	_, err := db.ExecContext(ctx, q, StatusSent, time.Now().UTC(), id)
+	_, err := db.ExecContext(ctx, q, StatusSent, id)
 	return err
 }
 
 func markFailed(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string) error {
 	q := fmt.Sprintf(`
 		UPDATE %s
-		SET status = $1, error_details = $2, next_retry_date = NULL, updated_at = $3
-		WHERE id = $4
+		SET status = $1, error_details = $2, next_retry_date = NULL, updated_at = NOW()
+		WHERE id = $3
 	`, qualifiedTable)
-	_, err := db.ExecContext(ctx, q, StatusFailed, truncateErr(details, errDetailsMaxLen), time.Now().UTC(), id)
+	_, err := db.ExecContext(ctx, q, StatusFailed, truncateErr(details, errDetailsMaxLen), id)
 	return err
 }
 
 func requeueTokenIssue(ctx context.Context, db *sql.DB, qualifiedTable string, id int64, details string, delay time.Duration) error {
-	next := time.Now().UTC().Add(delay)
+	// next_retry_date = NOW() + delay using DB clock (matches claim predicate next_retry_date <= NOW())
 	q := fmt.Sprintf(`
 		UPDATE %s
-		SET status = $1, error_details = $2, next_retry_date = $3, updated_at = $4
-		WHERE id = $5
+		SET status = $1, error_details = $2,
+		    next_retry_date = NOW() + ($3 * INTERVAL '1 second'), updated_at = NOW()
+		WHERE id = $4
+		RETURNING next_retry_date
 	`, qualifiedTable)
-	_, err := db.ExecContext(ctx, q, StatusPending, truncateErr(details, errDetailsMaxLen), next, time.Now().UTC(), id)
-	return err
+	var next sql.NullTime
+	err := db.QueryRowContext(ctx, q,
+		StatusPending,
+		truncateErr(details, errDetailsMaxLen),
+		delay.Seconds(),
+		id,
+	).Scan(&next)
+	if err != nil {
+		return err
+	}
+	nextStr := "?"
+	if next.Valid {
+		nextStr = next.Time.UTC().Format(time.RFC3339)
+	}
+	logger.L.Printf("row id=%d: back to pending (token issue), next_retry_date=%s: %s",
+		id, nextStr, truncateErr(details, 500))
+	return nil
+}
+
+func recoverStaleProcessing(ctx context.Context, db *sql.DB, qualifiedTable string, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	q := fmt.Sprintf(`
+		UPDATE %s
+		SET status = $1, updated_at = NOW(), next_retry_date = NULL
+		WHERE status = $2
+		  AND (updated_at < NOW() - ($3 * INTERVAL '1 second') OR updated_at IS NULL)
+	`, qualifiedTable)
+	res, err := db.ExecContext(ctx, q, StatusPending, StatusProcessing, olderThan.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r Row, opts ProcessOptions, details string) error {
@@ -189,27 +244,34 @@ func recordHTTPFailure(ctx context.Context, db *sql.DB, qualifiedTable string, r
 	if opts.MaxRetryAttempts > 0 && newCount > opts.MaxRetryAttempts {
 		q := fmt.Sprintf(`
 			UPDATE %s
-			SET status = $1, retry_count = $2, error_details = $3, next_retry_date = NULL, updated_at = $4
-			WHERE id = $5
+			SET status = $1, retry_count = $2, error_details = $3, next_retry_date = NULL, updated_at = NOW()
+			WHERE id = $4
 		`, qualifiedTable)
-		_, err := db.ExecContext(ctx, q, StatusFailed, newCount, details, time.Now().UTC(), r.ID)
+		_, err := db.ExecContext(ctx, q, StatusFailed, newCount, details, r.ID)
 		if err != nil {
 			return err
 		}
 		logger.L.Printf("row id=%d: failed after %d attempt(s): %s", r.ID, newCount, details)
 		return nil
 	}
-	next := time.Now().UTC().Add(retryBackoff(newCount, opts.RetryBaseInterval))
+	backoff := retryBackoff(newCount, opts.RetryBaseInterval)
 	q := fmt.Sprintf(`
 		UPDATE %s
-		SET status = $1, retry_count = $2, error_details = $3, next_retry_date = $4, updated_at = $5
-		WHERE id = $6
+		SET status = $1, retry_count = $2, error_details = $3,
+		    next_retry_date = NOW() + ($4 * INTERVAL '1 second'), updated_at = NOW()
+		WHERE id = $5
+		RETURNING next_retry_date
 	`, qualifiedTable)
-	_, err := db.ExecContext(ctx, q, StatusPending, newCount, details, next, time.Now().UTC(), r.ID)
+	var next sql.NullTime
+	err := db.QueryRowContext(ctx, q, StatusPending, newCount, details, backoff.Seconds(), r.ID).Scan(&next)
 	if err != nil {
 		return err
 	}
-	logger.L.Printf("row id=%d: retry %d scheduled at %s: %s", r.ID, newCount, next.UTC().Format(time.RFC3339), details)
+	nextStr := "?"
+	if next.Valid {
+		nextStr = next.Time.UTC().Format(time.RFC3339)
+	}
+	logger.L.Printf("row id=%d: retry %d scheduled at %s: %s", r.ID, newCount, nextStr, details)
 	return nil
 }
 
