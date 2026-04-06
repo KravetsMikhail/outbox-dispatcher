@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"database/sql"
+	stdlog "log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,12 +23,11 @@ import (
 )
 
 func main() {
-	logger.Init("[outbox-dispatcher]")
-
 	cfg, err := config.Load()
 	if err != nil {
-		logger.L.Fatalf("config: %v", err)
+		stdlog.Fatalf("config: %v", err)
 	}
+	logger.Init("[outbox-dispatcher]", cfg.Production)
 	if cfg.KeycloakTLSInsecure {
 		logger.L.Printf("warning: KEYCLOAK_TLS_INSECURE_SKIP_VERIFY enabled (Keycloak token requests only; do not use in production)")
 	}
@@ -46,7 +46,7 @@ func main() {
 
 	apiHTTP := &http.Client{Timeout: 60 * time.Second}
 	kcHTTP := keycloakHTTPClient(cfg)
-	kc := token.NewKeycloak(kcHTTP, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakScope, cfg.KeycloakUserAgent)
+	kc := token.NewKeycloak(kcHTTP, cfg.KeycloakTokenURL, cfg.KeycloakClientID, cfg.KeycloakClientSecret, cfg.KeycloakScope, cfg.KeycloakUserAgent, !cfg.Production)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -58,12 +58,13 @@ func main() {
 		cctx, ccancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer ccancel()
 		opts := outbox.ProcessOptions{
-			MaxRetryAttempts:          cfg.MaxRetryAttempts,
-			RetryBaseInterval:         cfg.RetryBaseInterval,
-			TokenRetryDelay:           cfg.TokenRetryDelay,
-			RetryMaxBackoff:           cfg.RetryMaxBackoff,
-			StaleProcessingRecovery:   cfg.StaleProcessingRecovery,
-			VerbosePoll:               cfg.PollLog,
+			MaxRetryAttempts:        cfg.MaxRetryAttempts,
+			RetryBaseInterval:       cfg.RetryBaseInterval,
+			TokenRetryDelay:         cfg.TokenRetryDelay,
+			RetryMaxBackoff:         cfg.RetryMaxBackoff,
+			StaleProcessingRecovery: cfg.StaleProcessingRecovery,
+			VerbosePoll:             cfg.PollLog,
+			LogSuccessfulDispatch:   !cfg.Production,
 		}
 		if err := outbox.ProcessPending(cctx, db, cfg.QualifiedOutboxTable(), cfg.PostBaseURL, kc, apiHTTP, opts); err != nil {
 			appstatus.SetProcessError(err)
@@ -84,7 +85,7 @@ func main() {
 		defer c.Stop()
 	} else {
 		logger.L.Printf("scheduler: interval %s", cfg.PollInterval)
-		if !cfg.PollLog {
+		if !cfg.PollLog && !cfg.Production {
 			logger.L.Printf("poll: quiet when outbox has no pending rows (no Keycloak call); set POLL_LOG=1 to log each cycle")
 		}
 		t := time.NewTicker(cfg.PollInterval)

@@ -34,6 +34,8 @@ type ProcessOptions struct {
 	StaleProcessingRecovery time.Duration
 	// VerbosePoll logs when no rows are claimed (explains next_retry_date / processing).
 	VerbosePoll bool
+	// LogSuccessfulDispatch logs each successful POST (line noise in production; off when false).
+	LogSuccessfulDispatch bool
 }
 
 type Row struct {
@@ -166,7 +168,9 @@ func dispatchOne(ctx context.Context, db *sql.DB, qualifiedTable, baseURL string
 		if err := markSent(ctx, db, qualifiedTable, r.ID); err != nil {
 			return err
 		}
-		logger.L.Printf("row id=%d: sent %s -> %d", r.ID, target, resp.StatusCode)
+		if opts.LogSuccessfulDispatch {
+			logger.L.Printf("row id=%d: sent %s -> %d", r.ID, target, resp.StatusCode)
+		}
 		return nil
 	}
 

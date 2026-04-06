@@ -18,12 +18,13 @@ import (
 type Provider struct {
 	mu sync.Mutex
 
-	httpClient *http.Client
-	tokenURL   string
-	clientID   string
-	secret     string
-	scope      string // optional; sent when non-empty
-	userAgent  string // optional; sent when non-empty
+	httpClient  *http.Client
+	tokenURL    string
+	clientID    string
+	secret      string
+	scope       string // optional; sent when non-empty
+	userAgent   string // optional; sent when non-empty
+	verboseHTTP bool   // request/refresh logs (off in production)
 
 	cached    string
 	expiresAt time.Time
@@ -32,17 +33,18 @@ type Provider struct {
 // NewKeycloak creates a token provider. tokenURL must be the full OpenID token URL, e.g.
 // https://keycloak.example.com/realms/myrealm/protocol/openid-connect/token
 // Requests use grant_type=client_credentials, client_id, client_secret (and optional scope).
-func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scope, userAgent string) *Provider {
+func NewKeycloak(httpClient *http.Client, tokenURL, clientID, clientSecret, scope, userAgent string, verboseHTTP bool) *Provider {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
 	return &Provider{
-		httpClient: httpClient,
-		tokenURL:   strings.TrimSpace(tokenURL),
-		clientID:   strings.TrimSpace(clientID),
-		secret:     strings.TrimSpace(clientSecret),
-		scope:      strings.TrimSpace(scope),
-		userAgent:  strings.TrimSpace(userAgent),
+		httpClient:  httpClient,
+		tokenURL:    strings.TrimSpace(tokenURL),
+		clientID:    strings.TrimSpace(clientID),
+		secret:      strings.TrimSpace(clientSecret),
+		scope:       strings.TrimSpace(scope),
+		userAgent:   strings.TrimSpace(userAgent),
+		verboseHTTP: verboseHTTP,
 	}
 }
 
@@ -78,8 +80,10 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 		req.Header.Set("User-Agent", p.userAgent)
 	}
 
-	logger.L.Printf("keycloak token request: POST %s Content-Type=%s body=%s",
-		p.tokenURL, req.Header.Get("Content-Type"), redactedFormBodyForLog(form))
+	if p.verboseHTTP {
+		logger.L.Printf("keycloak token request: POST %s Content-Type=%s body=%s",
+			p.tokenURL, req.Header.Get("Content-Type"), redactedFormBodyForLog(form))
+	}
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
@@ -112,7 +116,9 @@ func (p *Provider) BearerToken(ctx context.Context) (string, error) {
 	}
 	p.cached = tr.AccessToken
 	p.expiresAt = time.Now().Add(time.Duration(exp) * time.Second)
-	logger.L.Printf("keycloak token refreshed (expires_in=%ds)", exp)
+	if p.verboseHTTP {
+		logger.L.Printf("keycloak token refreshed (expires_in=%ds)", exp)
+	}
 	return p.cached, nil
 }
 

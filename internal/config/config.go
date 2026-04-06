@@ -53,6 +53,9 @@ type Config struct {
 	// PollLog logs every interval poll cycle (POLL_LOG=true|1); useful when debugging "silent" runs.
 	PollLog bool
 
+	// Production is true when APP_ENV is production or prod (compact logs, less Keycloak/outbox noise for Docker).
+	Production bool
+
 	// StaleProcessingRecovery resets rows left in status=processing longer than this (OUTBOX_STALE_PROCESSING_AFTER); 0 = off.
 	StaleProcessingRecovery time.Duration
 }
@@ -150,6 +153,9 @@ func Load() (*Config, error) {
 
 	pollLog := strings.TrimSpace(os.Getenv("POLL_LOG"))
 	cfg.PollLog = strings.EqualFold(pollLog, "true") || pollLog == "1"
+
+	appEnv := strings.ToLower(strings.TrimSpace(os.Getenv("APP_ENV")))
+	cfg.Production = appEnv == "production" || appEnv == "prod"
 
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("UI_DISABLE")), "true") || strings.TrimSpace(os.Getenv("UI_DISABLE")) == "1" {
 		cfg.UIListenAddr = ""
