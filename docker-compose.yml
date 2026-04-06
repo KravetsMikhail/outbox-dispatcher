@@ -1,0 +1,66 @@
+# outbox-dispatcher: опрос PostgreSQL outbox, POST наружу, Keycloak, веб-дашборд (по умолчанию :8484).
+# Скопируйте .env.example в .env и задайте POST_BASE_URL, Keycloak и т.д.
+#
+# Только приложение:     docker compose up -d --build
+# С локальным Postgres:   docker compose --profile postgres up -d --build
+#   тогда в .env: DATABASE_URL=postgres://outbox:outbox@postgres:5432/outbox?sslmode=disable
+
+name: outbox-dispatcher
+
+services:
+  outbox-dispatcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: outbox-dispatcher:local
+    container_name: outbox-dispatcher
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      # Хост-порт : контейнер (порт внутри = из UI_LISTEN_ADDR, по умолчанию 8484)
+      - "${OUTBOX_UI_PORT:-8484}:8484"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+    healthcheck:
+      # Удалите весь блок healthcheck, если в .env задано UI_DISABLE=true
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8484/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres:
+    profiles: [postgres]
+    image: postgres:16-alpine
+    container_name: outbox-dispatcher-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: outbox
+      POSTGRES_PASSWORD: outbox
+      POSTGRES_DB: outbox
+    ports:
+      # С хоста: localhost:${OUTBOX_POSTGRES_PORT}; из контейнера приложения хост — postgres:5432
+      - "${OUTBOX_POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - outbox_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U outbox -d outbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  outbox_pgdata:
